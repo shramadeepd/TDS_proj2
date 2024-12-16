@@ -13,7 +13,6 @@
 
 import os
 import sys
-import csv
 import json
 import pandas as pd
 import seaborn as sns
@@ -23,6 +22,7 @@ import requests
 from dotenv import load_dotenv
 from collections import Counter
 import time
+import logging
 
 load_dotenv()
 
@@ -32,7 +32,7 @@ if not API_KEY:
     raise ValueError("AIPROXY_TOKEN environment variable not set.")
 
 BASE_URL = "http://aiproxy.sanand.workers.dev/openai/v1/chat/completions"
-MODEL = "gpt-4o-mini"  # Specific model for AI Proxy
+MODEL = "gpt-4o-mini"
 
 # Function to send a message to the LLM and get a response
 def send_to_llm(messages, function_call=None, functions=None, max_retries=3):
@@ -49,17 +49,17 @@ def send_to_llm(messages, function_call=None, functions=None, max_retries=3):
     
     for attempt in range(max_retries):
         try:
-            response = requests.post(BASE_URL, headers=headers, json=payload, timeout=10)  # Added timeout for faster responses
-            response.raise_for_status()  # Raise HTTPError for bad responses (4xx or 5xx)
+            response = requests.post(BASE_URL, headers=headers, json=payload, timeout=10)
+            response.raise_for_status()
             response_data = response.json()
             if response_data and "choices" in response_data and len(response_data["choices"]) > 0:
                 return response_data["choices"][0]["message"]
             else:
-                print(f"LLM Response: Unexpected format, attempt {attempt + 1}")
+                logging.warning(f"LLM Response: Unexpected format, attempt {attempt + 1}")
                 
         except requests.exceptions.RequestException as e:
-            print(f"Error during LLM communication: {e}, attempt {attempt + 1}")
-            time.sleep(1) # Add a short delay before retry
+            logging.error(f"Error during LLM communication: {e}, attempt {attempt + 1}")
+            time.sleep(1)
     return None
 
 
@@ -76,7 +76,7 @@ def execute_function_call(name, arguments, data):
     elif name == "generate_summary_stats":
         return generate_summary_stats(data, **arguments)
     elif name == "find_correlation":
-         return find_correlation(data, **arguments)
+        return find_correlation(data, **arguments)
     elif name == "plot_correlation_matrix":
         plot_correlation_matrix(data)
         return "Correlation matrix plot generated successfully"
@@ -242,45 +242,52 @@ functions = [
 ]
 
 def load_and_analyze_data(file_path):
-    # Check if path is a directory
-    if os.path.isdir(file_path):
-        print(f"Error: {file_path} is a directory. Please provide a CSV file path.")
+    """Load and analyze the dataset."""
+    if not file_path or os.path.isdir(file_path):
+        logging.error(f"Invalid file path or directory: {file_path}")
         return None, None
-        
+
     try:
-        data = pd.read_csv(file_path, encoding='utf-8')
-    except UnicodeDecodeError:
         try:
+            data = pd.read_csv(file_path, encoding='utf-8')
+        except UnicodeDecodeError:
             data = pd.read_csv(file_path, encoding='latin1')
-        except Exception as e:
-            print(f"Error loading data with multiple encodings: {e}")
+
+        logging.info(f"Successfully loaded dataset with {len(data)} rows and {len(data.columns)} columns")
+        if data.empty:
+            logging.error("Dataset is empty.")
             return None, None
+
+        messages = generate_initial_prompt(file_path)
+        analysis_steps = []
+        
+        for _ in range(3):
+            try:
+                message = send_to_llm(messages, functions=functions)
+                if not message:
+                    continue
+
+                messages.append(message)
+                function_name, function_args = extract_function_call(message)
+
+                if function_name:
+                    result = execute_function_call(function_name, function_args, data)
+                    if result:
+                        analysis_steps.append(f"Function call: {function_name} with arguments {function_args}, Result: {result}")
+                    messages.append({"role": "assistant", "content": result if result else "Function call completed."})
+                else:
+                    break
+            except Exception as e:
+                logging.error(f"Error in analysis loop: {e}")
+                continue
+        return analysis_steps, data
+
     except FileNotFoundError:
-        print(f"Error: File not found at {file_path}")
+        logging.error(f"File not found: {file_path}")
         return None, None
     except Exception as e:
-        print(f"Error loading data: {e}")
+        logging.error(f"Error loading data: {e}")
         return None, None
-
-    messages = generate_initial_prompt(file_path)
-    analysis_steps = []
-
-    while True:
-        message = send_to_llm(messages, functions=functions)
-        if not message:
-            break
-        messages.append(message)
-        function_name, function_args = extract_function_call(message)
-
-        if function_name:
-            result = execute_function_call(function_name, function_args, data)
-            if result:
-                analysis_steps.append(f"Function call: {function_name} with arguments {function_args}, Result: {result}")
-            messages.append({"role": "assistant", "content": result if result else "Function call completed."})
-        else:
-            break
-            
-    return analysis_steps, data
 
 
 def describe_columns(data):
@@ -293,6 +300,7 @@ def describe_columns(data):
         column_info.append(f"Column: {col}, Type: {col_type}, Example Value: {example_value}, Unique Values: {unique_values}, Missing Values: {missing_values}")
     return "\n".join(column_info)
 
+
 def generate_summary_stats(data, columns):
      try:
         summary = data[columns].describe().to_string()
@@ -302,18 +310,15 @@ def generate_summary_stats(data, columns):
 
 
 def find_correlation(data, columns):
-    """Calculate correlation between specified columns"""
     try:
-        # Validate columns exist
         valid, error_msg = validate_columns(data, columns)
         if not valid:
             return error_msg
-            
-        # Check if columns are numeric
+        
         non_numeric = [col for col in columns if not np.issubdtype(data[col].dtype, np.number)]
         if non_numeric:
             return f"Non-numeric columns found: {', '.join(non_numeric)}"
-            
+
         corr_matrix = data[columns].corr()
         return corr_matrix.to_string()
     except Exception as e:
@@ -321,29 +326,25 @@ def find_correlation(data, columns):
 
 
 def plot_correlation_matrix(data):
-    """Generate correlation heatmap"""
     try:
-        # Create output directory if it doesn't exist
         output_dir = os.path.splitext(os.path.basename(sys.argv[1]))[0]
         os.makedirs(output_dir, exist_ok=True)
         
-        # Generate plot
         numeric_cols = data.select_dtypes(include=[np.number]).columns
         if len(numeric_cols) < 2:
-            print("Not enough numeric columns for correlation matrix")
+            logging.warning("Not enough numeric columns for correlation matrix")
             return
-            
+        
         plt.figure(figsize=(10, 8))
         sns.heatmap(data[numeric_cols].corr(), annot=True, cmap='coolwarm', fmt='.2f')
         plt.title("Correlation Matrix")
         
-        # Save plot
         output_path = os.path.join(output_dir, "correlation_matrix.png")
         plt.savefig(output_path, bbox_inches='tight', dpi=300)
         plt.close()
-        print(f"Saved correlation matrix to {output_path}")
+        logging.info(f"Saved correlation matrix to {output_path}")
     except Exception as e:
-        print(f"Error plotting correlation matrix: {e}")
+        logging.error(f"Error plotting correlation matrix: {e}")
 
 
 def detect_outliers(data, columns):
@@ -362,45 +363,43 @@ def detect_outliers(data, columns):
     except Exception as e:
          return f"Error finding outliers: {e}"
 
+
 def plot_histogram(data, columns):
-    """Generate histograms for specified columns"""
     try:
-        # Validate columns exist
         valid, error_msg = validate_columns(data, columns)
         if not valid:
-            print(error_msg)
+            logging.error(error_msg)
             return
-            
+
         output_dir = os.path.splitext(os.path.basename(sys.argv[1]))[0]
         os.makedirs(output_dir, exist_ok=True)
-        
+            
         for col in columns:
             if not np.issubdtype(data[col].dtype, np.number):
-                print(f"Column {col} is not numeric, skipping histogram")
+                logging.warning(f"Column {col} is not numeric, skipping histogram")
                 continue
-                
+
             plt.figure(figsize=(8, 6))
             sns.histplot(data=data[col].dropna(), kde=True)
             plt.title(f"Distribution of {col}")
             plt.xlabel(col)
             plt.ylabel("Count")
-            
+
             output_path = os.path.join(output_dir, f"histogram_{col}.png")
             plt.savefig(output_path, bbox_inches='tight', dpi=300)
             plt.close()
-            print(f"Saved histogram for {col} to {output_path}")
+            logging.info(f"Saved histogram for {col} to {output_path}")
+
     except Exception as e:
-        print(f"Error plotting histograms: {e}")
+        logging.error(f"Error plotting histograms: {e}")
+
 
 def cluster_analysis(data, columns, n_clusters=3):
-    """Perform clustering analysis on specified columns"""
     try:
-        # Validate columns exist
         valid, error_msg = validate_columns(data, columns)
         if not valid:
             return error_msg
             
-        # Check if columns are numeric
         non_numeric = [col for col in columns if not np.issubdtype(data[col].dtype, np.number)]
         if non_numeric:
             return f"Non-numeric columns found: {', '.join(non_numeric)}"
@@ -432,10 +431,13 @@ def plot_cluster_scatter(data, x_column, y_column):
         plt.figure(figsize=(8,6))
         sns.scatterplot(x=x_column, y=y_column, hue='cluster', data=data, palette='viridis')
         plt.title('Cluster Scatter Plot')
-        plt.savefig(os.path.join(output_dir, 'cluster_scatter.png'), bbox_inches='tight')
+        output_path = os.path.join(output_dir, 'cluster_scatter.png')
+        plt.savefig(output_path, bbox_inches='tight')
         plt.close()
+        logging.info(f"Saved cluster scatter plot to {output_path}")
     except Exception as e:
-        print(f"Error plotting cluster scatter: {e}")
+        logging.error(f"Error plotting cluster scatter: {e}")
+
 
 def analyze_text_column(data, column):
     try:
@@ -454,8 +456,7 @@ def analyze_text_column(data, column):
 
 
 def generate_narrative(analysis_steps, data):
-    """Generate narrative and visualizations based on LLM suggestions"""
-    # First, get the analysis narrative
+    """Generate narrative and visualizations based on LLM suggestions."""
     messages = [
         {
             "role": "system",
@@ -481,62 +482,52 @@ def generate_narrative(analysis_steps, data):
 
     content = response.get('content', '') if isinstance(response, dict) else response
     
-    # Split response into visualizations and narrative
     try:
         viz_section, narrative_section = content.split("NARRATIVE:", 1)
         viz_lines = [line.strip() for line in viz_section.split("VISUALIZATIONS:")[1].split("\n") if line.strip()]
         
-        # Generate visualizations based on suggestions
         for viz in viz_lines:
             if "plot_correlation_matrix" in viz.lower():
                 plot_correlation_matrix(data)
             elif "plot_histogram" in viz.lower():
-                # Extract column names from the suggestion
                 cols = [col.strip() for col in viz.split("(")[-1].split(")")[0].split(",")]
                 plot_histogram(data, cols)
             elif "plot_cluster_scatter" in viz.lower():
-                # Extract x and y columns from the suggestion
                 cols = [col.strip() for col in viz.split("(")[-1].split(")")[0].split(",")]
                 if len(cols) >= 2:
                     plot_cluster_scatter(data, cols[0], cols[1])
-        
+                    
         return narrative_section.strip()
     except Exception as e:
-        print(f"Error processing LLM response: {e}")
-        return content  # Return full content if parsing fails
+        logging.error(f"Error processing LLM response: {e}")
+        return content
+
 
 def save_markdown(analysis, charts_exist):
-    """Save the analysis report and move images to the correct directory"""
-    # Get output directory name from input file
     output_dir = os.path.splitext(os.path.basename(sys.argv[1]))[0]
     os.makedirs(output_dir, exist_ok=True)
     
-    # Create markdown content
     markdown_content = f"# Analysis Report\n\n{analysis}\n\n"
     
-    # Handle images
     if charts_exist:
         markdown_content += "\n## Visualizations\n\n"
         for filename in os.listdir("."):
             if filename.endswith(".png"):
-                # Add image to markdown
                 markdown_content += f"![{filename}]({filename})\n\n"
-                # Move image to output directory
                 try:
                     os.rename(filename, os.path.join(output_dir, filename))
                 except Exception as e:
-                    print(f"Error moving {filename}: {e}")
-    
-    # Save README.md in output directory
+                    logging.error(f"Error moving {filename}: {e}")
+
     try:
         with open(os.path.join(output_dir, "README.md"), "w", encoding='utf-8') as f:
             f.write(markdown_content)
-        print(f"Analysis saved to {output_dir}/README.md")
+        logging.info(f"Analysis saved to {output_dir}/README.md")
     except Exception as e:
-        print(f"Error saving README.md: {e}")
+        logging.error(f"Error saving README.md: {e}")
+
 
 def validate_columns(data, columns):
-    """Validate that all columns exist in the dataframe"""
     if not isinstance(columns, list):
         columns = [columns]
     
@@ -545,17 +536,33 @@ def validate_columns(data, columns):
         return False, f"Columns not found in data: {', '.join(missing_columns)}"
     return True, None
 
+
 def main():
     if len(sys.argv) != 2:
         print("Usage: python autolysis.py <dataset.csv>")
         sys.exit(1)
+    
     file_path = sys.argv[1]
-    analysis_steps, data = load_and_analyze_data(file_path)
-    if analysis_steps is None or data is None:
+    output_dir = os.path.splitext(os.path.basename(file_path))[0]
+    os.makedirs(output_dir, exist_ok=True)
+        
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[logging.FileHandler(os.path.join(output_dir, 'autolysis.log')), logging.StreamHandler()]
+    )
+    try:
+        analysis_steps, data = load_and_analyze_data(file_path)
+        if analysis_steps is None or data is None:
+            sys.exit(1)
+            
+        analysis = generate_narrative(analysis_steps, data)
+        charts_exist = any(filename.endswith(".png") for filename in os.listdir("."))
+        save_markdown(analysis, charts_exist)
+    except Exception as e:
+        logging.error(f"Error in main execution: {e}")
         sys.exit(1)
-    analysis = generate_narrative(analysis_steps, data)
-    charts_exist = any(filename.endswith(".png") for filename in os.listdir("."))
-    save_markdown(analysis, charts_exist)
+
 
 if __name__ == "__main__":
     main()
