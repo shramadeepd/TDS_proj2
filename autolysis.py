@@ -323,43 +323,7 @@ def plot_correlation_matrix(data):
         print(f"Error plotting correlation matrix: {e}")
 
 
-def detect_outliers(data, columns):import os
-import sys
-import csv
-import json
-import pandas as pd
-import seaborn as sns
-import matplotlib.pyplot as plt
-import numpy as np
-import requests
-from dotenv import load_dotenv
-from collections import Counter
-import time
-
-load_dotenv()
-
-# Load the AI Proxy token from environment variable
-API_KEY = os.environ.get("AIPROXY_TOKEN")
-if not API_KEY:
-    raise ValueError("AIPROXY_TOKEN environment variable not set.")
-
-BASE_URL = "http://aiproxy.sanand.workers.dev/openai/v1/chat/completions"
-MODEL = "gpt-4o-mini"  # Specific model for AI Proxy
-
-# Function to send a message to the LLM and get a response
-def send_to_llm(messages, function_call=None, functions=None, max_retries=3):
-    headers = {
-        "Authorization": f"Bearer {API_KEY}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "model": MODEL,
-        "messages": messages,
-        "function_call": function_call,
-        "functions": functions
-    }
-    
-
+def detect_outliers(data, columns):
     try:
         outliers = {}
         for col in columns:
@@ -439,19 +403,21 @@ def analyze_text_column(data, column):
 
 def generate_narrative(analysis_steps, data):
     messages = [
-            {
-                "role": "system",
-                 "content": "You are an expert data storyteller, turning analysis results into an engaging narrative. Briefly describe the data, then explain the analysis steps, highlighting key insights and their implications. The analysis steps should be provided in order. Be brief. Keep your response as short as possible. Don't add extra commentary, and avoid using the word 'narrative'. Do not respond with more than 4 paragraphs."
-            },
-            {
-                "role": "user",
-                "content": f"Here are the analysis steps:\n{analysis_steps}.\nUse them to generate the story."
-            }
-        ]
+        {
+            "role": "system",
+            "content": "You are an expert data storyteller, turning analysis results into an engaging narrative. Briefly describe the data, then explain the analysis steps, highlighting key insights and their implications. The analysis steps should be provided in order. Be brief. Keep your response as short as possible. Don't add extra commentary, and avoid using the word 'narrative'. Do not respond with more than 4 paragraphs."
+        },
+        {
+            "role": "user",
+            "content": f"Here are the analysis steps:\n{analysis_steps}.\nUse them to generate the story."
+        }
+    ]
 
     response = send_to_llm(messages)
-    if response:
-        return response['content']
+    if response and isinstance(response, dict):
+        return response.get('content', "Failed to generate the story.")
+    elif response and isinstance(response, str):
+        return response
     else:
         return "Failed to generate the story."
 
