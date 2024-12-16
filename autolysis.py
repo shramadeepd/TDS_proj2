@@ -1,3 +1,16 @@
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "pandas>=2.0.0",
+#     "numpy>=1.24.0", 
+#     "seaborn>=0.12.0",
+#     "matplotlib>=3.7.0",
+#     "requests>=2.31.0",
+#     "python-dotenv>=1.0.0",
+#     "scikit-learn>=1.3.0"
+# ]
+# ///
+
 import os
 import sys
 import csv
@@ -229,38 +242,44 @@ functions = [
 ]
 
 def load_and_analyze_data(file_path):
+    # Check if path is a directory
+    if os.path.isdir(file_path):
+        print(f"Error: {file_path} is a directory. Please provide a CSV file path.")
+        return None, None
+        
     try:
         data = pd.read_csv(file_path, encoding='utf-8')
     except UnicodeDecodeError:
-         try:
-             data = pd.read_csv(file_path, encoding='latin1')
-         except Exception as e:
+        try:
+            data = pd.read_csv(file_path, encoding='latin1')
+        except Exception as e:
             print(f"Error loading data with multiple encodings: {e}")
-            return None
+            return None, None
     except FileNotFoundError:
         print(f"Error: File not found at {file_path}")
-        return None
+        return None, None
     except Exception as e:
         print(f"Error loading data: {e}")
-        return None
+        return None, None
 
     messages = generate_initial_prompt(file_path)
     analysis_steps = []
 
     while True:
-            message = send_to_llm(messages, functions=functions)
-            if not message:
-                break
-            messages.append(message)
-            function_name, function_args = extract_function_call(message)
+        message = send_to_llm(messages, functions=functions)
+        if not message:
+            break
+        messages.append(message)
+        function_name, function_args = extract_function_call(message)
 
-            if function_name:
-                result = execute_function_call(function_name, function_args, data)
-                if result:
-                  analysis_steps.append(f"Function call: {function_name} with arguments {function_args}, Result: {result}")
-                messages.append({"role": "assistant", "content": result if result else "Function call completed."})
-            else:
-                 break
+        if function_name:
+            result = execute_function_call(function_name, function_args, data)
+            if result:
+                analysis_steps.append(f"Function call: {function_name} with arguments {function_args}, Result: {result}")
+            messages.append({"role": "assistant", "content": result if result else "Function call completed."})
+        else:
+            break
+            
     return analysis_steps, data
 
 
@@ -304,7 +323,43 @@ def plot_correlation_matrix(data):
         print(f"Error plotting correlation matrix: {e}")
 
 
-def detect_outliers(data, columns):
+def detect_outliers(data, columns):import os
+import sys
+import csv
+import json
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+import numpy as np
+import requests
+from dotenv import load_dotenv
+from collections import Counter
+import time
+
+load_dotenv()
+
+# Load the AI Proxy token from environment variable
+API_KEY = os.environ.get("AIPROXY_TOKEN")
+if not API_KEY:
+    raise ValueError("AIPROXY_TOKEN environment variable not set.")
+
+BASE_URL = "http://aiproxy.sanand.workers.dev/openai/v1/chat/completions"
+MODEL = "gpt-4o-mini"  # Specific model for AI Proxy
+
+# Function to send a message to the LLM and get a response
+def send_to_llm(messages, function_call=None, functions=None, max_retries=3):
+    headers = {
+        "Authorization": f"Bearer {API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": MODEL,
+        "messages": messages,
+        "function_call": function_call,
+        "functions": functions
+    }
+    
+
     try:
         outliers = {}
         for col in columns:
