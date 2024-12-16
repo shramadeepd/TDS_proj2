@@ -311,14 +311,14 @@ def find_correlation(data, columns):
 
 def plot_correlation_matrix(data):
     try:
-      numerical_cols = data.select_dtypes(include=np.number).columns.tolist()
-      corr_matrix = data[numerical_cols].corr()
-      plt.figure(figsize=(10, 8))
-      sns.heatmap(corr_matrix, annot=True, cmap='coolwarm', fmt=".2f")
-      plt.title("Correlation Matrix")
-      plt.savefig("correlation_matrix.png", bbox_inches='tight')
-      plt.close()
-
+        output_dir = os.path.splitext(os.path.basename(sys.argv[1]))[0]
+        numerical_cols = data.select_dtypes(include=np.number).columns.tolist()
+        corr_matrix = data[numerical_cols].corr()
+        plt.figure(figsize=(10, 8))
+        sns.heatmap(corr_matrix, annot=True, cmap='coolwarm', fmt=".2f")
+        plt.title("Correlation Matrix")
+        plt.savefig(os.path.join(output_dir, "correlation_matrix.png"), bbox_inches='tight')
+        plt.close()
     except Exception as e:
         print(f"Error plotting correlation matrix: {e}")
 
@@ -341,15 +341,16 @@ def detect_outliers(data, columns):
 
 def plot_histogram(data, columns):
     try:
-      for col in columns:
-          if data[col].dtype in [np.int64, np.float64]:
-            plt.figure(figsize=(8, 6))
-            sns.histplot(data[col], kde=True)
-            plt.title(f"Histogram of {col}")
-            plt.xlabel(col)
-            plt.ylabel("Frequency")
-            plt.savefig(f"histogram_{col}.png", bbox_inches='tight')
-            plt.close()
+        output_dir = os.path.splitext(os.path.basename(sys.argv[1]))[0]
+        for col in columns:
+            if data[col].dtype in [np.int64, np.float64]:
+                plt.figure(figsize=(8, 6))
+                sns.histplot(data[col], kde=True)
+                plt.title(f"Histogram of {col}")
+                plt.xlabel(col)
+                plt.ylabel("Frequency")
+                plt.savefig(os.path.join(output_dir, f"histogram_{col}.png"), bbox_inches='tight')
+                plt.close()
     except Exception as e:
         print(f"Error plotting histogram: {e}")
 
@@ -375,12 +376,13 @@ def cluster_analysis(data, columns, n_clusters=3):
 
 def plot_cluster_scatter(data, x_column, y_column):
     try:
+        output_dir = os.path.splitext(os.path.basename(sys.argv[1]))[0]
         if 'cluster' not in data.columns:
-           return "Clustering hasn't been performed yet. Cannot plot cluster scatter."
+            return "Clustering hasn't been performed yet. Cannot plot cluster scatter."
         plt.figure(figsize=(8,6))
         sns.scatterplot(x=x_column, y=y_column, hue='cluster', data=data, palette='viridis')
         plt.title('Cluster Scatter Plot')
-        plt.savefig('cluster_scatter.png', bbox_inches='tight')
+        plt.savefig(os.path.join(output_dir, 'cluster_scatter.png'), bbox_inches='tight')
         plt.close()
     except Exception as e:
         print(f"Error plotting cluster scatter: {e}")
@@ -422,17 +424,29 @@ def generate_narrative(analysis_steps, data):
         return "Failed to generate the story."
 
 def save_markdown(analysis, charts_exist):
+    # Create output directory based on input filename (without .csv extension)
+    output_dir = os.path.splitext(os.path.basename(sys.argv[1]))[0]
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Move all PNG files to the output directory
+    png_files = []
+    for filename in os.listdir("."):
+        if filename.endswith(".png"):
+            dest_path = os.path.join(output_dir, filename)
+            os.rename(filename, dest_path)
+            png_files.append(filename)
+    
     markdown_content = f"# Analysis Report\n\n{analysis}\n\n"
-
-    if charts_exist:
+    
+    if png_files:
         markdown_content += f"\n\n## Visualizations\n"
-        for filename in os.listdir("."):
-            if filename.endswith(".png"):
-                 markdown_content += f"![{filename}]({filename})\n"
-
-    with open("README.md", "w") as f:
-            f.write(markdown_content)
-    print("Analysis report saved to README.md")
+        for filename in png_files:
+            markdown_content += f"![{filename}]({filename})\n"
+    
+    # Save README.md in the output directory
+    with open(os.path.join(output_dir, "README.md"), "w") as f:
+        f.write(markdown_content)
+    print(f"Analysis report and visualizations saved to {output_dir}/")
 
 
 def main():
