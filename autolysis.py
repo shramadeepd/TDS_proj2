@@ -243,6 +243,94 @@ def generate_analysis_prompt(file_path, analysis_steps):
          }
     ]
 
+# Functions the LLM can call:
+functions = [
+    {
+    "name": "describe_data",
+    "description": "Provide a description of the dataset including column types and missing values.",
+    "parameters": {
+        "type": "object",
+        "properties": {}
+        }
+    },
+    {
+        "name": "analyze_numeric_column",
+        "description": "Analyze a numerical column, calculating summary statistics, outliers, and correlations.",
+          "parameters": {
+            "type": "object",
+             "properties": {
+                "column": {
+                   "type": "string",
+                   "description":"Numerical column to analyze."
+                  }
+             },
+             "required": ["column"]
+        }
+    },
+     {
+        "name": "analyze_text_column",
+        "description": "Analyze a specific text column.",
+        "parameters": {
+            "type": "object",
+             "properties": {
+                "column": {
+                   "type": "string",
+                   "description":"Text column to analyze."
+                  }
+            },
+            "required": ["column"]
+        }
+    },
+    {
+        "name": "cluster_data",
+        "description": "Performs clustering analysis on specified columns.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "columns": {
+                    "type": "array",
+                    "description": "List of numerical columns to perform clustering on.",
+                    "items": {"type": "string"}
+                },
+                "n_clusters": {
+                     "type": "integer",
+                    "description": "Number of clusters to form.",
+                     "default": 3
+                }
+            },
+            "required": ["columns"]
+        }
+    },
+     {
+        "name": "visualize_data",
+        "description": "Generate a specific plot type.",
+         "parameters": {
+            "type": "object",
+            "properties": {
+                "plot_type": {
+                   "type": "string",
+                   "description":"The type of plot to generate (e.g., 'histogram', 'scatter', 'correlation')."
+                 },
+                 "columns": {
+                     "type": "array",
+                     "description":"Columns to use for the plot.",
+                     "items": {"type": "string"}
+                 },
+                  "x_column":{
+                   "type": "string",
+                   "description":"Column for X axis (for scatter plots)"
+                   },
+                   "y_column":{
+                    "type": "string",
+                   "description":"Column for Y axis (for scatter plots)"
+                   }
+            },
+            "required": ["plot_type"]
+        }
+    }
+]
+
+
 def load_and_analyze_data(file_path):
     """Loads, analyzes, and visualizes data from a CSV file."""
     if os.path.isdir(file_path):
